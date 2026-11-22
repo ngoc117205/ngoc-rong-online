@@ -1,0 +1,114 @@
+package main
+
+import (
+	"encoding/json"
+	"log"
+	"net/http"
+	"strings"
+	"sync"
+
+	"golang.org/x/crypto/bcrypt"
+)
+
+type Account struct {
+	PasswordHash string
+}
+
+var (
+	accounts = make(map[string]Account)
+	mu       sync.RWMutex
+)
+
+func reply(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"message": msg})
+}
+
+func health(w http.ResponseWriter, r *http.Request) {
+	reply(w, 200, "NGOC RONG ONLINE Alpha 0.2")
+}
+
+func register(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		reply(w, 405, "POST required")
+		return
+	}
+
+	var data struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	if json.NewDecoder(r.Body).Decode(&data) != nil {
+		reply(w, 400, "Invalid JSON")
+		return
+	}
+l
+	data.Username = strings.TrimSpace(data.Username)
+	if len(data.Username) < 3 || len(data.Username) > 20 ||
+		len(data.Password) < 8 || len(data.Password) > 72 {
+		reply(w, 400, "Invalid username or password length")
+		return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword(
+		[]byte(data.Password), bcrypt.DefaultCost,
+	)
+	if err != nil {
+		reply(w, 500, "Server error")
+		return
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if _, exists := accounts[data.Username]; exists {
+		reply(w, 409, "Username already exists")
+		return
+	}
+
+	accounts[data.Username] = Account{PasswordHash: string(hash)}
+	reply(w, 201, "Registration successful")
+}
+
+func login(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		reply(w, 405, "POST required")
+		return
+	}
+
+	var data struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+
+	if json.NewDecoder(r.Body).Decode(&data) != nil {
+		reply(w, 400, "Invalid JSON")
+		return
+	}
+
+	mu.RLock()
+	account, exists := accounts[data.Username]
+	mu.RUnlock()
+
+	if !exists || bcrypt.CompareHashAndPassword(
+		[]byte(account.PasswordHash), []byte(data.Password),
+	) != nil {
+		reply(w, 401, "Invalid username or password")
+		return
+	}
+
+	reply(w, 200, "Login successful")
+}
+
+func main() {
+	http.HandleFunc("/health", health)
+	http.HandleFunc("/register", register)
+	http.HandleFunc("/login", login)
+
+	log.Println("NGOC RONG ONLINE SERVER Alpha 0.2")
+	log.Println("Server running on port 8080")
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}
